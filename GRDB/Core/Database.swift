@@ -587,7 +587,7 @@ public final class Database: CustomStringConvertible, CustomDebugStringConvertib
             #if GRDBCUSTOMSQLITE || GRDBCIPHER || os(iOS)
             sqlite3_trace_v2(sqliteConnection, 0, nil, nil)
             #elseif os(Linux)
-            sqlite3_trace(sqliteConnection, nil)
+            sqlite3_trace(sqliteConnection, nil, nil)
             #else
             if #available(OSX 10.12, tvOS 10.0, watchOS 3.0, *) {
                 sqlite3_trace_v2(sqliteConnection, 0, nil, nil)
