@@ -206,11 +206,7 @@ public struct Inflections {
         }
         let range = NSRange(string.startIndex..<string.endIndex, in: string)
         for (reg, template) in rules.reversed() {
-            let result = NSMutableString(string: string)
-            let matchCount = reg.replaceMatches(in: result, options: [], range: range, withTemplate: template)
-            if matchCount > 0 {
-                return String(result)
-            }
+            return reg.stringByReplacingMatches(in: string, options: [], range: range, withTemplate: template)
         }
         return string
     }
