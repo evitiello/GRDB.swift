@@ -1579,6 +1579,7 @@ extension Database {
         /// An event reported by `TracingOptions.profile`.
         case profile(statement: Statement, duration: TimeInterval)
         #elseif os(Linux)
+        case profile(statement: Statement, duration: TimeInterval)
         #else
         /// An event reported by `TracingOptions.profile`.
         @available(OSX 10.12, tvOS 10.0, watchOS 3.0, *)
