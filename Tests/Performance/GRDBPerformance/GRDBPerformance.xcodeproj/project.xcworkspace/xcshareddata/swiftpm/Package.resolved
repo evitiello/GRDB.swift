@@ -5,9 +5,9 @@
         "package": "FMDB",
         "repositoryURL": "https://github.com/ccgus/fmdb.git",
         "state": {
-          "branch": "master",
-          "revision": "3e5efdf6690cf7dce0a914c370507deee8740d33",
-          "version": null
+          "branch": null,
+          "revision": "61e51fde7f7aab6554f30ab061cc588b28a97d04",
+          "version": "2.7.7"
         }
       },
       {
@@ -15,8 +15,8 @@
         "repositoryURL": "https://github.com/realm/realm-cocoa.git",
         "state": {
           "branch": null,
-          "revision": "c236b2c1270fe41ba7c101a1d17ef56494987cb9",
-          "version": "10.5.0"
+          "revision": "83a07f6a508c3427058d9e2c466208d0b6a960fa",
+          "version": "10.12.0"
         }
       },
       {
@@ -24,8 +24,8 @@
         "repositoryURL": "https://github.com/realm/realm-core",
         "state": {
           "branch": null,
-          "revision": "7390723ae39b432bd00f093ea84e3b79534a202c",
-          "version": "10.3.2"
+          "revision": "e72b3078bfc5c3f69a0b18f7a220be27e28c463f",
+          "version": "11.2.0"
         }
       },
       {
@@ -33,8 +33,8 @@
         "repositoryURL": "https://github.com/stephencelis/SQLite.swift.git",
         "state": {
           "branch": null,
-          "revision": "0a9893ec030501a3956bee572d6b4fdd3ae158a1",
-          "version": "0.12.2"
+          "revision": "8096e9b9c5cc694f373d2176f96889d3e4afe053",
+          "version": "0.13.0"
         }
       }
     ]

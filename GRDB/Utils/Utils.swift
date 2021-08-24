@@ -7,8 +7,8 @@ extension String {
     /// SQL query.
     ///
     ///     db.execute(sql: "SELECT * FROM \(tableName.quotedDatabaseIdentifier)")
-    @inlinable public var quotedDatabaseIdentifier: String {
-        // See https://www.sqlite.org/lang_keywords.html
+    public var quotedDatabaseIdentifier: String {
+        // See <https://www.sqlite.org/lang_keywords.html>
         return "\"\(self)\""
     }
 }
@@ -16,7 +16,6 @@ extension String {
 /// Return as many question marks separated with commas as the *count* argument.
 ///
 ///     databaseQuestionMarks(count: 3) // "?,?,?"
-@inlinable
 public func databaseQuestionMarks(count: Int) -> String {
     repeatElement("?", count: count).joined(separator: ",")
 }
@@ -37,7 +36,6 @@ extension Optional: _OptionalProtocol { }
 // MARK: - Internal
 
 /// Reserved for GRDB: do not use.
-@inlinable
 func GRDBPrecondition(
     _ condition: @autoclosure() -> Bool,
     _ message: @autoclosure() -> String = "",
@@ -45,11 +43,15 @@ func GRDBPrecondition(
     line: UInt = #line)
 {
     /// Custom precondition function which aims at solving
-    /// https://bugs.swift.org/browse/SR-905 and
-    /// https://github.com/groue/GRDB.swift/issues/37
+    /// <https://bugs.swift.org/browse/SR-905> and
+    /// <https://github.com/groue/GRDB.swift/issues/37>
     if !condition() {
         fatalError(message(), file: file, line: line)
     }
+}
+
+func fatalError<E: Error>(_ error: E) -> Never {
+    try! { throw error }()
 }
 
 // Workaround Swift inconvenience around factory methods of non-final classes
@@ -88,7 +90,6 @@ extension DispatchQueue {
 }
 
 extension Sequence {
-    @inlinable
     func countElements(where predicate: (Element) throws -> Bool) rethrows -> Int {
         var count = 0
         for e in self where try predicate(e) {
@@ -107,7 +108,6 @@ extension Sequence {
 ///     try throwingFirstError(
 ///         execute: work,
 ///         finally: cleanup)
-@inline(__always)
 func throwingFirstError<T>(execute: () throws -> T, finally: () throws -> Void) throws -> T {
     var result: T?
     var firstError: Error?
@@ -166,8 +166,6 @@ func concat<T>(_ rhs: ((T) -> Void)?, _ lhs: ((T) -> Void)?) -> ((T) -> Void)? {
 }
 
 extension NSRecursiveLock {
-    @inlinable
-    @inline(__always)
     func synchronized<T>(
         _ message: @autoclosure () -> String = #function,
         _ block: () throws -> T)
@@ -194,8 +192,6 @@ extension NSRecursiveLock {
     
     /// Performs the side effect outside of the synchronized block. This allows
     /// avoiding deadlocks, when the side effect feedbacks.
-    @inlinable
-    @inline(__always)
     func synchronized(
         _ message: @autoclosure () -> String = #function,
         _ block: (inout (() -> Void)?) -> Void)

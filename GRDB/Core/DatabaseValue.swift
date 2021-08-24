@@ -4,8 +4,8 @@ import Foundation
 
 /// DatabaseValue is the intermediate type between SQLite and your values.
 ///
-/// See https://www.sqlite.org/datatype3.html
-public struct DatabaseValue: Hashable, CustomStringConvertible, DatabaseValueConvertible, SQLExpression {
+/// See <https://www.sqlite.org/datatype3.html>
+public struct DatabaseValue: Hashable, CustomStringConvertible, DatabaseValueConvertible, SQLSpecificExpressible {
     /// The SQLite storage
     public let storage: Storage
     
@@ -13,6 +13,7 @@ public struct DatabaseValue: Hashable, CustomStringConvertible, DatabaseValueCon
     public static let null = DatabaseValue(storage: .null)
     
     /// An SQLite storage (NULL, INTEGER, REAL, TEXT, BLOB).
+    @frozen
     public enum Storage: Equatable {
         /// The NULL storage class.
         case null
@@ -137,69 +138,23 @@ public struct DatabaseValue: Hashable, CustomStringConvertible, DatabaseValueCon
             fatalError("Unexpected SQLite column type: \(type)")
         }
     }
-    
-    // MARK: SQLExpression
-    
-    /// :nodoc:
-    public func _expressionSQL(_ context: SQLGenerationContext, wrappedInParenthesis: Bool) throws -> String {
-        if isNull {
-            // fast path for NULL
-            return "NULL"
-        } else if context.append(arguments: [self]) {
-            // Use statement arguments
-            return "?"
-        } else {
-            // Quoting needed: just use SQLite, which knows better.
-            return try String.fetchOne(context.db, sql: "SELECT QUOTE(?)", arguments: [self])!
-        }
-    }
-    
-    /// :nodoc:
-    public func _identifyingRowIDs(_ db: Database, for alias: TableAlias) throws -> Set<Int64>? {
-        if isNull || self == false.databaseValue {
-            // Those requests select no row:
-            // - WHERE NULL
-            // - WHERE 0
-            return []
-        }
-        return nil
-    }
-    
-    // Specific boolean checks for null, true, and false
-    /// :nodoc:
-    public func _is(_ test: _SQLBooleanTest) -> SQLExpression {
+}
+
+extension DatabaseValue: StatementBinding {
+    public func bind(to sqliteStatement: SQLiteStatement, at index: CInt) -> CInt {
         switch storage {
         case .null:
-            return DatabaseValue.null
-            
-        case .int64(let int64) where int64 == 0 || int64 == 1:
-            switch test {
-            case .true:
-                return (int64 == 1).sqlExpression
-            case .false, .falsey:
-                return (int64 == 0).sqlExpression
-            }
-            
-        default:
-            switch test {
-            case .true:
-                return SQLExpressionEqual(.equal, self, true.sqlExpression)
-            case .false:
-                return SQLExpressionEqual(.equal, self, false.sqlExpression)
-            case .falsey:
-                return SQLExpressionNot(self)
-            }
+            return sqlite3_bind_null(sqliteStatement, index)
+        case .int64(let int64):
+            return int64.bind(to: sqliteStatement, at: index)
+        case .double(let double):
+            return double.bind(to: sqliteStatement, at: index)
+        case .string(let string):
+            return string.bind(to: sqliteStatement, at: index)
+        case .blob(let data):
+            return data.bind(to: sqliteStatement, at: index)
         }
     }
-    
-    /// :nodoc:
-    public var _isConstantInRequest: Bool { true }
-    
-    /// :nodoc:
-    public var _isTrue: Bool { self == true.databaseValue }
-    
-    /// :nodoc:
-    public func _qualifiedExpression(with alias: TableAlias) -> SQLExpression { self }
 }
 
 // MARK: - Hashable & Equatable
@@ -276,9 +231,8 @@ extension DatabaseValue {
 
 // SQLExpressible
 extension DatabaseValue {
-    /// :nodoc:
     public var sqlExpression: SQLExpression {
-        self
+        .databaseValue(self)
     }
 }
 

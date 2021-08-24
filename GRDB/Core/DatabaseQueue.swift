@@ -36,7 +36,6 @@ public final class DatabaseQueue: DatabaseWriter {
         writer = try SerializedDatabase(
             path: path,
             configuration: configuration,
-            schemaCache: DatabaseSchemaCache(),
             defaultLabel: "GRDB.DatabaseQueue")
         
         setupSuspension()
@@ -60,7 +59,6 @@ public final class DatabaseQueue: DatabaseWriter {
         writer = try! SerializedDatabase(
             path: ":memory:",
             configuration: configuration,
-            schemaCache: DatabaseSchemaCache(),
             defaultLabel: "GRDB.DatabaseQueue")
     }
     
@@ -177,9 +175,16 @@ extension DatabaseQueue {
     ///
     /// - parameter block: A block that accesses the database.
     /// - throws: The error thrown by the block.
-    public func read<T>(_ block: (Database) throws -> T) rethrows -> T {
+    public func read<T>(_ block: (Database) throws -> T) throws -> T {
         try writer.sync { db in
-            try db.readOnly { try block(db) }
+            // The transaction guarantees snapshot isolation against eventual
+            // external connection.
+            var result: T?
+            try db.inTransaction(.deferred) {
+                result = try db.readOnly { try block(db) }
+                return .commit
+            }
+            return result!
         }
     }
     
@@ -201,6 +206,9 @@ extension DatabaseQueue {
     public func asyncRead(_ block: @escaping (Result<Database, Error>) -> Void) {
         writer.async { db in
             do {
+                // The transaction guarantees snapshot isolation against eventual
+                // external connection.
+                try db.beginTransaction(.deferred)
                 try db.beginReadOnly()
             } catch {
                 block(.failure(error))
@@ -211,6 +219,7 @@ extension DatabaseQueue {
             
             // Ignore error because we can not notify it.
             try? db.endReadOnly()
+            try? db.commit()
         }
     }
     
@@ -223,6 +232,9 @@ extension DatabaseQueue {
             }
             
             do {
+                // The transaction guarantees snapshot isolation against eventual
+                // external connection.
+                try db.beginTransaction(.deferred)
                 try db.beginReadOnly()
             } catch {
                 block(.failure(error))
@@ -233,6 +245,7 @@ extension DatabaseQueue {
             
             // Ignore error because we can not notify it.
             try? db.endReadOnly()
+            try? db.commit()
         }
     }
     
@@ -276,9 +289,14 @@ extension DatabaseQueue {
             try writer.execute { db in
                 // ... and that no transaction is opened.
                 GRDBPrecondition(!db.isInsideTransaction, "must not be called from inside a transaction.")
-                return try db.readOnly {
-                    try block(db)
+                // The transaction guarantees snapshot isolation against eventual
+                // external connection.
+                var result: T?
+                try db.inTransaction(.deferred) {
+                    result = try db.readOnly { try block(db) }
+                    return .commit
                 }
+                return result!
             }
         })
     }
@@ -293,6 +311,7 @@ extension DatabaseQueue {
             GRDBPrecondition(!db.isInsideTransaction, "must not be called from inside a transaction.")
             
             do {
+                try db.beginTransaction(.deferred)
                 try db.beginReadOnly()
             } catch {
                 block(.failure(error))
@@ -303,6 +322,7 @@ extension DatabaseQueue {
             
             // Ignore error because we can not notify it.
             try? db.endReadOnly()
+            try? db.commit()
         }
     }
     
@@ -328,7 +348,7 @@ extension DatabaseQueue {
     /// - parameters:
     ///     - kind: The transaction type (default nil). If nil, the transaction
     ///       type is configuration.defaultTransactionKind, which itself
-    ///       defaults to .deferred. See https://www.sqlite.org/lang_transaction.html
+    ///       defaults to .deferred. See <https://www.sqlite.org/lang_transaction.html>
     ///       for more information.
     ///     - updates: The updates to the database.
     /// - throws: The error thrown by the updates, or by the
@@ -371,6 +391,17 @@ extension DatabaseQueue {
     /// - throws: The error thrown by the updates.
     public func barrierWriteWithoutTransaction<T>(_ updates: (Database) throws -> T) rethrows -> T {
         try writer.sync(updates)
+    }
+    
+    /// Asynchronously executes database updates in a protected dispatch queue,
+    /// outside of any transaction, and returns the result.
+    ///
+    /// Eventual concurrent database accesses are postponed until the updates
+    /// are completed.
+    ///
+    /// - parameter updates: The updates to the database.
+    public func asyncBarrierWriteWithoutTransaction(_ updates: @escaping (Database) -> Void) {
+        writer.async(updates)
     }
     
     /// Synchronously executes database updates in a protected dispatch queue,

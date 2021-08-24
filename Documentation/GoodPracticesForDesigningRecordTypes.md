@@ -9,6 +9,8 @@ To support this guide, we'll design a simple library application that lets the u
 
 - [Trust SQLite More Than Yourself]
 - [Persistable Record Types are Responsible for Their Tables]
+- [Record Types Hide Intimate Database Details]
+- [Singleton Records]
 - [Define Record Requests]
 - [Compose Records]
 - [How to Design Database Managers]
@@ -96,13 +98,13 @@ Define one record type per database table, and make it adopt a [PersistableRecor
 In this sample code, we'll use Codable structs, but there are [other ways](../README.md#examples-of-record-definitions) to define records.
 
 ```swift
-struct Author: Codable {
+struct Author: Codable, Identifiable {
     var id: Int64?
     var name: String
     var country: String?
 }
 
-struct Book: Codable {
+struct Book: Codable, Identifiable {
     var id: Int64?
     var authorId: Int64
     var title: String
@@ -138,12 +140,108 @@ That's it. The `Author` type can read and write in the `author` database table. 
 >     print(author.id!) // Guaranteed non-nil id
 > }
 > ```
+>
+> :bulb: **Tip**: When the database table has a single-column primary key, have your record type adopt the standard [Identifiable] protocol. This allows GRDB to define type-safe id-related methods:
+>
+> ```swift
+> let authorID: Int64 = ...
+> let author: Author? = try dbQueue.read { db in
+>     try Author.fetchOne(db, id: authorID)
+> }
+> ```
 
-Since `Author` and `Book` can insert, update, and delete rows in the `author` and `book` database tables, they are *responsible for modifying those database tables*.
+Now that `Author` and `Book` can read and write in their own database tables, they are responsible for it. Make sure each record type deals with one database table, and only one database table!
 
-Applying the **[Single Responsibility Principle]** has a consequence: don't even try to have an author responsible for its books. Don't add a `books: [Book]` property in Author. Don't let Author write in the `book` table. When a new fellow coworker joins your team and asks you "who is saving books in the database?", you don't want to answer "it depends." You want to confidently answer: "the Book type".
 
-> :bulb: **Tip**: Make sure each record type deals with one database table, and only one database table.
+## Record Types Hide Intimate Database Details
+
+The application uses `Book` and `Author` as regular structs, using their properties. Each of those properties matches a column in the database (`Book.title`, `Author.id`), and is defined with a Swift type that is natively supported by SQLite (`String`, `Int`, etc.)
+
+Sometimes, it happens that raw database column names and types are not a very good fit for the application.
+
+Let's look at three examples:
+
+1. Authors write books, and more specifically novels, poems, essays, or theatre plays. Let's add a `kind` column in the database. For easy debugging of the database contents, a book kind is represented as a string ("novel", "essay", etc.):
+
+    ```swift
+    try db.create(table: "book") { t in
+        ...
+        t.column("kind", .text).notNull()
+    }
+    ```
+    
+    In Swift, it is not a good practice to use `String` for the type of the `kind` property. We want an enum instead:
+    
+    ```swift
+    struct Book: Codable {
+        enum Kind: String, Codable {
+            case novel, poems, essay, play
+        }
+        var id: Int64?
+        var authorId: Int64
+        var title: String
+        var kind: Kind
+    }
+    ```
+    
+    In order to make it possible to use `Book.Kind` in book requests (see [Define Record Requests] below), we add this conformance:
+    
+    ```swift
+    extension Book.Kind: DatabaseValueConvertible { }
+    ```
+    
+    > :bulb: Records can pick the best suited [Value] type for their column properties (Bool, Int, String, Date, etc.) Thanks to its enum property, the `Book` record prevents unknown book kinds from entering the database.
+
+2. GPS coordinates are usually stored in two distinct `latitude` and `longitude` columns. But the standard way to deal with such coordinate is a single `CLLocationCoordinate2D` struct.
+
+    When this happens, keep column properties private, and provide sensible accessors instead:
+    
+    ```swift
+    struct Place: Codable {
+        var id: Int64?
+        var name: String
+        private var latitude: CLLocationDegrees
+        private var longitude: CLLocationDegrees
+        
+        var coordinate: CLLocationCoordinate2D {
+            get {
+                CLLocationCoordinate2D(latitude: latitude, longitude: longitude)
+            }
+            set {
+                latitude = newValue.latitude
+                longitude = newValue.longitude
+            }
+        }
+    }
+    ```
+    
+    > :bulb: Private properties make it possible to hide raw columns from the rest of the application.
+
+3. The record below exposes a `price: Decimal` property ($12.00), backed by an integer column that stores a quantity of cents (1200). An integer column is preferred because it allows SQLite to compute exact sums of prices.
+    
+    ```swift
+    struct Product: Codable {
+        var id: Int64?
+        var name: String
+        private var priceCents: Int
+        
+        var price: Decimal {
+            get { Decimal(priceCents) / 100 }
+            set { priceCents = NSDecimalNumber(decimal: newValue * 100).intValue }
+        }
+    }
+    ```
+    
+    > :bulb: Private properties allow records to choose both their best database representation, and at the same time, their best Swift interface.
+
+**Generally speaking**, record types are the dedicated place, in your code, where you can transform raw database values into well-suited types that the rest of the application will enjoy. When needed, you can even [validate values](../README.md#customizing-the-persistence-methods) before they enter the database.
+
+
+## Singleton Records
+
+**Singleton Records** are records that store configuration values, user preferences, and generally some global application state. They are backed by a database table that contains a single row.
+
+The recommended setup for such records is described in the [Single-Row Tables](SingleRowTables.md) guide. Go check it, and come back when you're done!
 
 
 ## Define Record Requests
@@ -166,7 +264,7 @@ extension Author {
 }
 ```
 
-Otherwise, declare a plain String enum that conforms to the ColumnExpression protocol:
+Otherwise, declare a plain `String` enum that conforms to the `ColumnExpression` protocol:
 
 ```swift
 // For a non-codable record
@@ -178,31 +276,50 @@ extension Author {
 }
 ```
 
-> :bulb: **Tip**: Define commonly used requests in a constrained extension of the `DerivableRequest` protocol.
-
-The `DerivableRequest` protocol generally lets you filter, sort, and join or include associations (we'll talk about associations in the [Compose Records] chapter below).
-
-Here is how you define those requests:
+Those columns let you define requests:
 
 ```swift
-// Some requests of Author --------------------v
+try dbQueue.read { db in
+    // Order authors by name, in a localized case-insensitive fashion
+    let sortedAuthors: [Author] = try Author.all()
+        .order(Author.Columns.name.collating(.localizedCaseInsensitiveCompare))
+        .fetchAll(db)
+    
+    // French authors
+    let frenchAuthors: [Author] = try Author.all()
+        .filter(Author.Columns.country == "France")
+        .fetchAll(db)
+}
+```
+
+> :bulb: **Tip**: Define commonly used requests in a constrained extension of the `DerivableRequest` protocol.
+
+When you find yourself build similar requests over and over in your application, you may want to define a reusable and composable request vocabulary. This will avoid repetition in your app, ease refactoring, and enable [testability](DemoApps/GRDBDemoiOS/GRDBDemoiOSTests/PlayerTests.swift).
+
+To do so, extend the `DerivableRequest` protocol. It generally lets you filter, sort, leverage associations (we'll talk about associations in the [Compose Records] chapter below), etc:
+
+```swift
+// Author requests         ~~~~~~~~~~~~~~~~~~~~~~~~~~
 extension DerivableRequest where RowDecoder == Author {
-	
-    /// Returns a request for all authors ordered by name, in a localized
-    /// case-insensitive fashion
+    /// Order authors by name, in a localized case-insensitive fashion
     func orderByName() -> Self {
         let name = Author.Columns.name
         return order(name.collating(.localizedCaseInsensitiveCompare))
     }
     
-    /// Returns a request for all authors from a country
+    /// Filters authors from a country
     func filter(country: String) -> Self {
         filter(Author.Columns.country == country)
+    }
+    
+    /// Filters authors with at least one book
+    func havingBooks() -> Self {
+        having(Author.books.isEmpty == false)
     }
 }
 ```
 
-Those methods defined on the `DerivableRequest` protocol hide intimate database details. They allow you to compose database requests in a fluent style:
+Those methods encapsulate intimate database details, and allow you to compose database requests in a fluent and legible style:
 
 ```swift
 try dbQueue.read { db in
@@ -214,71 +331,54 @@ try dbQueue.read { db in
         .filter(country: "France")
         .fetchAll(db)
         
-    let sortedSpanishAuthors: [Author] = try Author.all()
+    let sortedSpanishAuthorsHavingBooks: [Author] = try Author.all()
         .filter(country: "Spain")
+        .havingBooks()
         .orderByName()
         .fetchAll(db)
 }
 ```
 
-Those customized request methods are also available on record associations, because associations conform to the `DerivableRequest` protocol:
+Because they are defined in an extension of the `DerivableRequest` protocol, our customized methods can decorate both requests and associations. See how the implementation of `filter(authorCountry:)` for books, below, uses the `filter(country:)` for authors:
 
 ```swift
-// Some requests of Book
+// Book requests           ~~~~~~~~~~~~~~~~~~~~~~~~
 extension DerivableRequest where RowDecoder == Book {
-    /// Returns a request for all books from a country
+    /// Filters books by kind
+    func filter(kind: Book.Kind) -> Self {
+        filter(Book.Columns.kind == kind)
+    }
+    
+    /// Filters books from a country
     func filter(authorCountry: String) -> Self {
-        // A book is from a country if it can be
-        // joined with an author from that country:
-        // ---------------------------v
+        // Books do not have any country column. But their author has one.
+        // A book is from a country if it can be joined to an author from this country:
         joining(required: Book.author.filter(country: authorCountry))
     }
 }
 
 try dbQueue.read { db in
-    let italianBooks = try Book.all()
+    let italianNovels: [Book] = try Book.all()
+        .filter(kind: .novel)
         .filter(authorCountry: "Italy")
         .fetchAll(db)
 }
 ```
 
-Not *every requests* can be expressed on `DerivableRequest`. For example, [Association Aggregates] are out of scope. When this happens, define your requests in a constrained extension to `QueryInterfaceRequest`:
+Extensions to the `DerivableRequest` protocol can not change the type of requests. This has to be expressed in an extension to `QueryInterfaceRequest`. For example:
 
 ```swift
-// More requests of Author -------------------------v
+// Author requests              ~~~~~~~~~~~~~~~~~~~~~~~~~~
 extension QueryInterfaceRequest where RowDecoder == Author {
-    /// Returns a request for all authors with at least one book
-    func havingBooks() -> QueryInterfaceRequest<Author> {
-        having(Author.books.isEmpty == false)
+    // Selects author ids
+    func id() -> QueryInterfaceRequest<Int64> {
+        select(Author.Columns.id)
     }
 }
+
+// IDs of French authors
+let ids: [Int64] = try Author.all().filter(country: "France").id().fetchAll(db)
 ```
-
-Those requests defined on `QueryInterfaceRequest` still compose fluently:
-
-```swift
-try dbQueue.read { db in
-    let sortedFrenchAuthorsHavingBooks = try Author.all()
-        .filter(country: "France")
-        .havingBooks() // <-
-        .orderByName()
-        .fetchAll(db)
-}
-```
-
-Finally, when it happens that a request only makes sense when defined on the Record type itself, just go ahead and define a static method or property of your Record type:
-
-```swift
-extension MySingletonRecord {
-    /// The one any only record stored in the database
-    static let shared = all().limit(1)
-}
-
-let singleton = try dbQueue.read { db
-    try MySingletonRecord.shared.fetchOne(db)
-}
-```
-
 
 ## Compose Records
 
@@ -358,7 +458,7 @@ Granted with primitive and derived record types, your application will load the 
     let authorId = 123
     let authorInfo: AuthorInfo? = try dbQueue.read { db in
         let request = Author
-            .filter(key: authorId)
+            .filter(id: authorId)
             .including(all: Author.books)
         return try AuthorInfo.fetchOne(db, request)
     }
@@ -374,7 +474,7 @@ Granted with primitive and derived record types, your application will load the 
     let bookId = 123
     let bookInfo: BookInfo? = try dbQueue.read { db in
         let request = Book
-            .filter(key: bookId)
+            .filter(id: bookId)
             .including(required: Book.author)
         return try BookInfo.fetchOne(db, request)
     }
@@ -411,7 +511,7 @@ Those properties provide an alternative way to feed our application:
     }
     let authorId = 123
     let authorInfo: AuthorInfo? = try dbQueue.read { db in
-        guard let author = try Author.fetchOne(db, key: authorId) else {
+        guard let author = try Author.fetchOne(db, id: authorId) else {
             return nil
         }
         let books = try author.books.fetchAll(db)
@@ -430,7 +530,7 @@ Those properties provide an alternative way to feed our application:
     }
     let bookId = 123
     let bookInfo: BookInfo? = try dbQueue.read { db in
-        guard let book = try Book.fetchOne(db, key: bookId) else {
+        guard let book = try Book.fetchOne(db, id: bookId) else {
             return nil
         }
         guard let author = try book.author.fetchOne(db) else {
@@ -472,7 +572,7 @@ class NaiveLibraryManager {
     func author(id: Int64) -> Author? {
         do {
             return try dbQueue.read { db in
-                try Author.fetchOne(db, key: id)
+                try Author.fetchOne(db, id: id)
             }
         } catch {
             return nil
@@ -482,7 +582,7 @@ class NaiveLibraryManager {
     func book(id: Int64) -> Book? {
         do {
             return try dbQueue.read { db in
-                try Book.fetchOne(db, key: id)
+                try Book.fetchOne(db, id: id)
             }
         } catch {
             return nil
@@ -531,13 +631,13 @@ class ImprovedLibraryManager {
     
     func author(id: Int64) throws -> Author? {
         try dbQueue.read { db in
-            try Author.fetchOne(db, key: id)
+            try Author.fetchOne(db, id: id)
         }
     }
     
     func book(id: Int64) throws -> Book? {
         try dbQueue.read { db in
-            try Book.fetchOne(db, key: id)
+            try Book.fetchOne(db, id: id)
         }
     }
     
@@ -611,7 +711,7 @@ extension LibraryManager {
     
     func bookInfo(bookId: Int64) throws -> BookInfo? {
         try dbQueue.read { db in
-            guard let book = try Book.fetchOne(db, key: bookId) else {
+            guard let book = try Book.fetchOne(db, id: bookId) else {
                 return nil
             }
             guard let author = try book.author.fetchOne(db) else {
@@ -631,7 +731,7 @@ extension LibraryManager {
     
     func authorInfo(authorId: Int64) throws -> AuthorInfo? {
         try dbQueue.read { db in
-            guard let author = try Author.fetchOne(db, key: authorId) else {
+            guard let author = try Author.fetchOne(db, id: authorId) else {
                 return nil
             }
             let books = try author.books.fetchAll(db)
@@ -696,7 +796,6 @@ Instead, have a look at [Database Observation]:
 [Django]: https://docs.djangoproject.com/en/2.0/topics/db/
 [record protocols]: ../README.md#record-protocols-overview
 [Separation of Concerns]: https://en.wikipedia.org/wiki/Separation_of_concerns
-[Single Responsibility Principle]: https://en.wikipedia.org/wiki/Single_responsibility_principle
 [Single Source of Truth]: https://en.wikipedia.org/wiki/Single_source_of_truth
 [Divide and Conquer]: https://en.wikipedia.org/wiki/Divide_and_rule
 [Why Adopt GRDB?]: WhyAdoptGRDB.md
@@ -713,6 +812,8 @@ Instead, have a look at [Database Observation]:
 [TransactionObserver]: ../README.md#transactionobserver-protocol
 [Trust SQLite More Than Yourself]: #trust-sqlite-more-than-yourself
 [Persistable Record Types are Responsible for Their Tables]: #persistable-record-types-are-responsible-for-their-tables
+[Record Types Hide Intimate Database Details]: #record-types-hide-intimate-database-details
+[Singleton Records]: #singleton-records
 [Define Record Requests]: #define-record-requests
 [Compose Records]: #compose-records
 [How to Design Database Managers]: #how-to-design-database-managers
@@ -727,3 +828,5 @@ Instead, have a look at [Database Observation]:
 [Codable Record]: ../README.md#codable-records
 [CodingKeys]: https://developer.apple.com/documentation/foundation/archives_and_serialization/encoding_and_decoding_custom_types
 [Combine Support]: Combine.md
+[Value]: ../README.md#values
+[Identifiable]: https://developer.apple.com/documentation/swift/identifiable
