@@ -933,7 +933,7 @@ extension FetchableRecordDecodableTests {
             }
             
             let adapter = SuffixRowAdapter(fromIndex: 1).addingScopes(["nestedKeyed": RangeRowAdapter(0..<1)])
-            let request = SQLRequest<Void>(
+            let request = SQLRequest(
                 sql: "SELECT ? AS name, ? AS nestedSingle, ? AS nestedUnkeyed",
                 arguments: ["foo", "bar", "[\"baz\"]"],
                 adapter: adapter)
@@ -969,7 +969,7 @@ extension FetchableRecordDecodableTests {
                 XCTAssertNil(record.nestedUnkeyed.context)
             }
             
-            let request = SQLRequest<Void>(
+            let request = SQLRequest(
                 sql: "SELECT ? AS nestedKeyed, ? AS nestedSingle, ? AS nestedUnkeyed",
                 arguments: ["{\"name\":\"foo\"}", "bar", "[\"baz\"]"])
             
@@ -1005,7 +1005,7 @@ extension FetchableRecordDecodableTests {
             }
             
             let adapter = SuffixRowAdapter(fromIndex: 1).addingScopes(["nestedKeyed": RangeRowAdapter(0..<1)])
-            let request = SQLRequest<Void>(
+            let request = SQLRequest(
                 sql: "SELECT ? AS name, ? AS nestedSingle, ? AS nestedUnkeyed",
                 arguments: ["foo", "bar", "[\"baz\"]"],
                 adapter: adapter)
@@ -1041,7 +1041,7 @@ extension FetchableRecordDecodableTests {
                 XCTAssertEqual(record.nestedUnkeyed.context, "JSON column: nestedUnkeyed")
             }
             
-            let request = SQLRequest<Void>(
+            let request = SQLRequest(
                 sql: "SELECT ? AS nestedKeyed, ? AS nestedSingle, ? AS nestedUnkeyed",
                 arguments: ["{\"name\":\"foo\"}", "bar", "[\"baz\"]"])
             
@@ -1064,9 +1064,9 @@ extension FetchableRecordDecodableTests {
         }
         
         // No error expected:
-        // - a is succesfully decoded because it consumes the one and unique
+        // - a is successfully decoded because it consumes the one and unique
         //   allowed missing key
-        // - b and c are succesfully decoded, because they are optionals, and
+        // - b and c are successfully decoded, because they are optionals, and
         //   all optionals decode missing keys are nil. This is because GRDB
         //   records accept rows with missing columns, and b and c may want to
         //   decode columns.
@@ -1130,4 +1130,60 @@ extension FetchableRecordDecodableTests {
             }
         }
     }
+
+    func testUserInfoJsonDecoding() throws {
+        struct NestedStruct : Codable {
+            let firstName: String?
+            let lastName: String?
+
+            init(firstName: String?, lastName: String?) {
+                self.firstName = firstName
+                self.lastName = lastName
+            }
+
+            init(from decoder: Decoder) throws {
+                let userInfoValue = decoder.userInfo[.testKey] as? String
+
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                if userInfoValue == "correct" {
+                    firstName = try container.decode(String.self, forKey: .firstName)
+                    lastName = try container.decode(String.self, forKey: .lastName)
+                } else {
+                    firstName = try container.decode(String.self, forKey: .lastName)
+                    lastName = try container.decode(String.self, forKey: .firstName)
+                }
+            }
+        }
+
+        struct StructWithNestedType : PersistableRecord, FetchableRecord, Codable {
+            static let databaseTableName = "t1"
+            static var databaseDecodingUserInfo: [CodingUserInfoKey: Any] = [CodingUserInfoKey.testKey: "correct"]
+            let nested: NestedStruct?
+        }
+
+        let dbQueue = try makeDatabaseQueue()
+        try dbQueue.inDatabase { db in
+            try db.create(table: "t1") { t in
+                t.column("nested", .text)
+            }
+            let nested = NestedStruct(firstName: "Bob", lastName: "Dylan")
+            let value = StructWithNestedType(nested: nested)
+            try value.insert(db)
+
+            let parentModel = try StructWithNestedType.fetchAll(db)
+
+            guard let nestedModel = parentModel.first?.nested else {
+                XCTFail()
+                return
+            }
+
+            // Check the nested model contains the expected values of first and last name
+            XCTAssertEqual(nestedModel.firstName, "Bob")
+            XCTAssertEqual(nestedModel.lastName, "Dylan")
+        }
+    }
+}
+
+fileprivate extension CodingUserInfoKey {
+    static let testKey = CodingUserInfoKey(rawValue: "correct")!
 }

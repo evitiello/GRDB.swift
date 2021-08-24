@@ -4,19 +4,25 @@ import GRDB
 /// AppDatabase lets the application access the database.
 ///
 /// It applies the pratices recommended at
-/// https://github.com/groue/GRDB.swift/blob/master/Documentation/GoodPracticesForDesigningRecordTypes.md
+/// <https://github.com/groue/GRDB.swift/blob/master/Documentation/GoodPracticesForDesigningRecordTypes.md>
 struct AppDatabase {
-    private let dbWriter: DatabaseWriter
-    
-    /// Creates an AppDatabase and make sure the database schema is ready.
+    /// Creates an `AppDatabase`, and make sure the database schema is ready.
     init(_ dbWriter: DatabaseWriter) throws {
         self.dbWriter = dbWriter
         try migrator.migrate(dbWriter)
     }
     
+    /// Provides access to the database.
+    ///
+    /// Application can use a `DatabasePool`, while SwiftUI previews and tests
+    /// can use a fast in-memory `DatabaseQueue`.
+    ///
+    /// See <https://github.com/groue/GRDB.swift/blob/master/README.md#database-connections>
+    private let dbWriter: DatabaseWriter
+    
     /// The DatabaseMigrator that defines the database schema.
     ///
-    /// See https://github.com/groue/GRDB.swift/blob/master/Documentation/Migrations.md
+    /// See <https://github.com/groue/GRDB.swift/blob/master/Documentation/Migrations.md>
     private var migrator: DatabaseMigrator {
         var migrator = DatabaseMigrator()
         
@@ -32,9 +38,6 @@ struct AppDatabase {
             try db.create(table: "player") { t in
                 t.autoIncrementedPrimaryKey("id")
                 t.column("name", .text).notNull()
-                    // Sort player names in a localized case insensitive fashion by default
-                    // See https://github.com/groue/GRDB.swift/blob/master/README.md#unicode
-                    .collate(.localizedCaseInsensitiveCompare)
                 t.column("score", .integer).notNull()
             }
         }
@@ -48,15 +51,28 @@ struct AppDatabase {
     }
 }
 
-// MARK: - Database Access
-//
-// This extension defines methods that fulfill application needs, both in terms
-// of writes and reads.
+// MARK: - Database Access: Writes
+
 extension AppDatabase {
-    // MARK: Writes
+    /// A validation error that prevents some players from being saved into
+    /// the database.
+    enum ValidationError: LocalizedError {
+        case missingName
+        
+        var errorDescription: String? {
+            switch self {
+            case .missingName:
+                return "Please provide a name"
+            }
+        }
+    }
     
-    /// Save (insert or update) a player.
+    /// Saves (inserts or updates) a player. When the method returns, the
+    /// player is present in the database, and its id is not nil.
     func savePlayer(_ player: inout Player) throws {
+        if player.name.isEmpty {
+            throw ValidationError.missingName
+        }
         try dbWriter.write { db in
             try player.save(db)
         }
@@ -65,7 +81,7 @@ extension AppDatabase {
     /// Delete the specified players
     func deletePlayers(ids: [Int64]) throws {
         try dbWriter.write { db in
-            _ = try Player.deleteAll(db, keys: ids)
+            _ = try Player.deleteAll(db, ids: ids)
         }
     }
     
@@ -80,7 +96,7 @@ extension AppDatabase {
     func refreshPlayers() throws {
         try dbWriter.write { db in
             if try Player.fetchCount(db) == 0 {
-                // Insert new random players
+                // When database is empty, insert new random players
                 try createRandomPlayers(db)
             } else {
                 // Insert a player
@@ -88,10 +104,12 @@ extension AppDatabase {
                     var player = Player.newRandom()
                     try player.insert(db)
                 }
+                
                 // Delete a random player
                 if Bool.random() {
                     try Player.order(sql: "RANDOM()").limit(1).deleteAll(db)
                 }
+                
                 // Update some players
                 for var player in try Player.fetchAll(db) where Bool.random() {
                     try player.updateChanges(db) {
@@ -110,6 +128,25 @@ extension AppDatabase {
             }
         }
     }
+
+    static let uiTestPlayers = [
+        Player(id: nil, name: "Arthur", score: 5),
+        Player(id: nil, name: "Barbara", score: 6),
+        Player(id: nil, name: "Craig", score: 8),
+        Player(id: nil, name: "David", score: 4),
+        Player(id: nil, name: "Elena", score: 1),
+        Player(id: nil, name: "Frederik", score: 2),
+        Player(id: nil, name: "Gilbert", score: 7),
+        Player(id: nil, name: "Henriette", score: 3)]
+
+    func createPlayersForUITests() throws {
+        try dbWriter.write { db in
+            try AppDatabase.uiTestPlayers.forEach { player in
+                var mutablePlayer = player
+                try mutablePlayer.save(db)
+            }
+        }
+    }
     
     /// Support for `createRandomPlayersIfEmpty()` and `refreshPlayers()`.
     private func createRandomPlayers(_ db: Database) throws {
@@ -118,22 +155,13 @@ extension AppDatabase {
             try player.insert(db)
         }
     }
-    
-    // MARK: Reads
-    
-    /// Returns a publisher that tracks changes in players ordered by name
-    func playersOrderedByNamePublisher() -> AnyPublisher<[Player], Error> {
-        ValueObservation
-            .tracking(Player.all().orderedByName().fetchAll)
-            .publisher(in: dbWriter)
-            .eraseToAnyPublisher()
-    }
-    
-    /// Returns a publisher that tracks changes in players ordered by score
-    func playersOrderedByScorePublisher() -> AnyPublisher<[Player], Error> {
-        ValueObservation
-            .tracking(Player.all().orderedByScore().fetchAll)
-            .publisher(in: dbWriter)
-            .eraseToAnyPublisher()
+}
+
+// MARK: - Database Access: Reads
+
+extension AppDatabase {
+    /// Provides a read-only access to the database
+    var databaseReader: DatabaseReader {
+        dbWriter
     }
 }

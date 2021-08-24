@@ -2,8 +2,9 @@ import GRDB
 
 /// The Player struct.
 ///
+/// Identifiable conformance supports type-safe GRDB primary key methods.
 /// Hashable conformance supports table view updates
-struct Player: Hashable {
+struct Player: Identifiable, Hashable {
     /// The player id.
     ///
     /// Int64 is the recommended type for auto-incremented database ids.
@@ -49,7 +50,7 @@ extension Player {
 
 /// Make Player a Codable Record.
 ///
-/// See https://github.com/groue/GRDB.swift/blob/master/README.md#records
+/// See <https://github.com/groue/GRDB.swift/blob/master/README.md#records>
 extension Player: Codable, FetchableRecord, MutablePersistableRecord {
     // Define database columns from CodingKeys
     fileprivate enum Columns {
@@ -67,28 +68,38 @@ extension Player: Codable, FetchableRecord, MutablePersistableRecord {
 
 /// Define some player requests used by the application.
 ///
-/// See https://github.com/groue/GRDB.swift/blob/master/README.md#requests
-/// See https://github.com/groue/GRDB.swift/blob/master/Documentation/GoodPracticesForDesigningRecordTypes.md
+/// See <https://github.com/groue/GRDB.swift/blob/master/README.md#requests>
+/// See <https://github.com/groue/GRDB.swift/blob/master/Documentation/GoodPracticesForDesigningRecordTypes.md>
 extension DerivableRequest where RowDecoder == Player {
-    /// A request of players ordered by name
+    /// A request of players ordered by name.
     ///
     /// For example:
     ///
-    ///     let players = try dbQueue.read { db in
+    ///     let players: [Player] = try dbWriter.read { db in
     ///         try Player.all().orderedByName().fetchAll(db)
     ///     }
     func orderedByName() -> Self {
-        order(Player.Columns.name)
+        // Sort by name in a localized case insensitive fashion
+        // See https://github.com/groue/GRDB.swift/blob/master/README.md#string-comparison
+        order(Player.Columns.name.collating(.localizedCaseInsensitiveCompare))
     }
     
-    /// A request of players ordered by score
+    /// A request of players ordered by score.
     ///
     /// For example:
     ///
-    ///     let players = try dbQueue.read { db in
+    ///     let players: [Player] = try dbWriter.read { db in
     ///         try Player.all().orderedByScore().fetchAll(db)
     ///     }
+    ///     let bestPlayer: Player? = try dbWriter.read { db in
+    ///         try Player.all().orderedByScore().fetchOne(db)
+    ///     }
     func orderedByScore() -> Self {
-        order(Player.Columns.score.desc, Player.Columns.name)
+        // Sort by descending score, and then by name, in a
+        // localized case insensitive fashion
+        // See https://github.com/groue/GRDB.swift/blob/master/README.md#string-comparison
+        order(
+            Player.Columns.score.desc,
+            Player.Columns.name.collating(.localizedCaseInsensitiveCompare))
     }
 }

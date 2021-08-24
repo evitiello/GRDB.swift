@@ -165,15 +165,33 @@ class QueryInterfaceExpressionsTests: GRDBTestCase {
     func testContainsWithCollation() throws {
         let dbQueue = try makeDatabaseQueue()
         
+        try dbQueue.read { db in
+            // Reminder of the SQLite behavior
+            // https://sqlite.org/datatype3.html#assigning_collating_sequences_from_sql
+            // > If an explicit collating sequence is required on an IN operator
+            // > it should be applied to the left operand, like this:
+            // > "x COLLATE nocase IN (y,z, ...)".
+            try XCTAssertFalse(Bool.fetchOne(db, sql: "SELECT 'arthur' IN ('ARTHUR') COLLATE NOCASE")!)
+            try XCTAssertTrue(Bool.fetchOne(db, sql: "SELECT 'arthur' COLLATE NOCASE IN ('ARTHUR')")!)
+        }
+        
         // Array.contains(): IN operator
         XCTAssertEqual(
             sql(dbQueue, tableRequest.filter(["arthur", "barbara"].contains(Col.name.collating(.nocase)))),
-            "SELECT * FROM \"readers\" WHERE \"name\" IN ('arthur', 'barbara') COLLATE NOCASE")
+            "SELECT * FROM \"readers\" WHERE (\"name\" COLLATE NOCASE) IN ('arthur', 'barbara')")
+        
+        XCTAssertEqual(
+            sql(dbQueue, tableRequest.filter(!["arthur", "barbara"].contains(Col.name.collating(.nocase)))),
+            "SELECT * FROM \"readers\" WHERE (\"name\" COLLATE NOCASE) NOT IN ('arthur', 'barbara')")
+        
+        XCTAssertEqual(
+            sql(dbQueue, tableRequest.filter((["arthur", "barbara"] as [SQLExpressible]).contains(Col.name.collating(.nocase)))),
+            "SELECT * FROM \"readers\" WHERE (\"name\" COLLATE NOCASE) IN ('arthur', 'barbara')")
         
         // Sequence.contains(): IN operator
         XCTAssertEqual(
             sql(dbQueue, tableRequest.filter(AnySequence(["arthur", "barbara"]).contains(Col.name.collating(.nocase)))),
-            "SELECT * FROM \"readers\" WHERE \"name\" IN ('arthur', 'barbara') COLLATE NOCASE")
+            "SELECT * FROM \"readers\" WHERE (\"name\" COLLATE NOCASE) IN ('arthur', 'barbara')")
         
         // Sequence.contains(): = operator
         XCTAssertEqual(
@@ -183,7 +201,7 @@ class QueryInterfaceExpressionsTests: GRDBTestCase {
         // Sequence.contains(): false
         XCTAssertEqual(
             sql(dbQueue, tableRequest.filter(EmptyCollection<Int>().contains(Col.name.collating(.nocase)))),
-            "SELECT * FROM \"readers\" WHERE 0 COLLATE NOCASE")
+            "SELECT * FROM \"readers\" WHERE 0")
 
         // ClosedInterval: BETWEEN operator
         let closedInterval = "A"..."z"
@@ -233,6 +251,59 @@ class QueryInterfaceExpressionsTests: GRDBTestCase {
         }
     }
     
+    func testSubqueryExists() throws {
+        let dbQueue = try makeDatabaseQueue()
+        
+        do {
+            try dbQueue.write { db in
+                try db.create(table: "team") { t in
+                    t.autoIncrementedPrimaryKey("id")
+                }
+                try db.create(table: "player") { t in
+                    t.column("teamID", .integer).references("team")
+                }
+                struct Player: TableRecord { }
+                struct Team: TableRecord { }
+                let teamAlias = TableAlias()
+                let player = Player.filter(Column("teamID") == teamAlias[Column("id")])
+                let teams = Team.aliased(teamAlias).filter(player.exists())
+                try assertEqualSQL(db, teams, """
+                    SELECT * FROM "team" WHERE EXISTS (SELECT * FROM "player" WHERE "teamID" = "team"."id")
+                    """)
+            }
+        }
+        
+        do {
+            let alias = TableAlias(name: "r")
+            let subquery = tableRequest.filter(Col.age > alias[Col.age])
+            XCTAssertEqual(
+                sql(dbQueue, tableRequest.aliased(alias).filter(subquery.exists())),
+                """
+                SELECT "r".* FROM "readers" "r" WHERE EXISTS (SELECT * FROM "readers" WHERE "age" > "r"."age")
+                """)
+        }
+        
+        do {
+            let alias = TableAlias(name: "r")
+            let subquery = tableRequest.filter(Col.age > alias[Col.age])
+            XCTAssertEqual(
+                sql(dbQueue, tableRequest.aliased(alias).filter(!subquery.exists())),
+                """
+                SELECT "r".* FROM "readers" "r" WHERE NOT EXISTS (SELECT * FROM "readers" WHERE "age" > "r"."age")
+                """)
+        }
+        
+        do {
+            let alias = TableAlias(name: "r")
+            let subquery = SQLRequest<Row>("SELECT * FROM readers WHERE age > \(alias[Col.age])")
+            XCTAssertEqual(
+                sql(dbQueue, tableRequest.aliased(alias).filter(subquery.exists())),
+                """
+                SELECT "r".* FROM "readers" "r" WHERE EXISTS (SELECT * FROM readers WHERE age > "r"."age")
+                """)
+        }
+    }
+
     func testGreaterThan() throws {
         let dbQueue = try makeDatabaseQueue()
         
@@ -1294,6 +1365,22 @@ class QueryInterfaceExpressionsTests: GRDBTestCase {
         XCTAssertEqual(
             sql(dbQueue, tableRequest.filter(Col.name.like("%foo") == false)),
             "SELECT * FROM \"readers\" WHERE (\"name\" LIKE '%foo') = 0")
+        
+        XCTAssertEqual(
+            sql(dbQueue, tableRequest.filter(Col.name.like("%foo", escape: "\\"))),
+            "SELECT * FROM \"readers\" WHERE \"name\" LIKE '%foo' ESCAPE '\\'")
+        
+        XCTAssertEqual(
+            sql(dbQueue, tableRequest.filter(!Col.name.like("%foo", escape: "\\"))),
+            "SELECT * FROM \"readers\" WHERE \"name\" NOT LIKE '%foo' ESCAPE '\\'")
+        
+        XCTAssertEqual(
+            sql(dbQueue, tableRequest.filter(Col.name.like("%foo", escape: "\\") == true)),
+            "SELECT * FROM \"readers\" WHERE (\"name\" LIKE '%foo' ESCAPE '\\') = 1")
+        
+        XCTAssertEqual(
+            sql(dbQueue, tableRequest.filter(Col.name.like("%foo", escape: "\\") == false)),
+            "SELECT * FROM \"readers\" WHERE (\"name\" LIKE '%foo' ESCAPE '\\') = 0")
     }
     
     
@@ -1361,19 +1448,19 @@ class QueryInterfaceExpressionsTests: GRDBTestCase {
                 CREATE TABLE compoundPrimaryKeyRecord (a INTEGER, b INTEGER, PRIMARY KEY (a, b));
                 """)
             
-            try assertEqualSQL(db, IntegerPrimaryKeyRecord.select(SQLExpressionFastPrimaryKey()), """
+            try assertEqualSQL(db, IntegerPrimaryKeyRecord.select(SQLExpression.fastPrimaryKey), """
                 SELECT "id" FROM "integerPrimaryKeyRecord"
                 """)
-            try assertEqualSQL(db, UUIDRecord.select(SQLExpressionFastPrimaryKey()), """
+            try assertEqualSQL(db, UUIDRecord.select(SQLExpression.fastPrimaryKey), """
                 SELECT "rowid" FROM "uuidRecord"
                 """)
-            try assertEqualSQL(db, UUIDRecordWithoutRowID.select(SQLExpressionFastPrimaryKey()), """
+            try assertEqualSQL(db, UUIDRecordWithoutRowID.select(SQLExpression.fastPrimaryKey), """
                 SELECT "uuid" FROM "uuidRecordWithoutRowID"
                 """)
-            try assertEqualSQL(db, RowIDRecord.select(SQLExpressionFastPrimaryKey()), """
+            try assertEqualSQL(db, RowIDRecord.select(SQLExpression.fastPrimaryKey), """
                 SELECT "rowid" FROM "rowIDRecord"
                 """)
-            try assertEqualSQL(db, CompoundPrimaryKeyRecord.select(SQLExpressionFastPrimaryKey()), """
+            try assertEqualSQL(db, CompoundPrimaryKeyRecord.select(SQLExpression.fastPrimaryKey), """
                 SELECT "rowid" FROM "compoundPrimaryKeyRecord"
                 """)
         }

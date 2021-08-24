@@ -10,7 +10,7 @@ import Foundation
 ///
 /// This scheduling guarantee is used by GRDB in order to be able
 /// to make promises on the scheduling of database values without surprising
-/// the users as in https://forums.swift.org/t/28631.
+/// the users as in <https://forums.swift.org/t/28631>.
 @available(OSX 10.15, iOS 13, tvOS 13, watchOS 6, *)
 struct ReceiveValuesOn<Upstream: Publisher, Context: Scheduler>: Publisher {
     typealias Output = Upstream.Output
@@ -119,8 +119,22 @@ where
                     subscription.request(currentDemand)
                 }
                 
-            case .waitingForRequest, .subscribed, .finished:
+            case .waitingForRequest, .subscribed:
                 preconditionFailure()
+                
+            case .finished:
+                // We receive the upstream subscription requested by
+                // `upstream.receive(subscriber: self)` above.
+                //
+                // But self has been cancelled since, so let's cancel this
+                // upstream subscription that has turned purposeless.
+                //
+                // This cancellation avoids the bug described in
+                // https://github.com/groue/GRDB.swift/pull/932
+                // TODO: write a regression test.
+                sideEffect = {
+                    subscription.cancel()
+                }
             }
         }
     }
