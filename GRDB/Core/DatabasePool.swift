@@ -179,43 +179,36 @@ extension DatabasePool {
     /// UIApplicationDidReceiveMemoryWarningNotification in order to release
     /// as much memory as possible.
     private func setupMemoryManagement() {
+
         let center = NotificationCenter.default
-        center.addObserver(
-            self,
-            selector: #selector(DatabasePool.applicationDidReceiveMemoryWarning(_:)),
-            name: UIApplication.didReceiveMemoryWarningNotification,
-            object: nil)
-        center.addObserver(
-            self,
-            selector: #selector(DatabasePool.applicationDidEnterBackground(_:)),
-            name: UIApplication.didEnterBackgroundNotification,
-            object: nil)
-    }
-    
-    @objc
-    private func applicationDidEnterBackground(_ notification: NSNotification) {
-        guard let application = notification.object as? UIApplication else {
-            return
-        }
-        
-        let task: UIBackgroundTaskIdentifier = application.beginBackgroundTask(expirationHandler: nil)
-        if task == .invalid {
-            // Perform releaseMemory() synchronously.
-            releaseMemory()
-        } else {
-            // Perform releaseMemory() asynchronously.
+        center.addObserver(forName: UIApplication.didReceiveMemoryWarningNotification,
+            object: nil, queue: OperationQueue()) { notification in
+            
             DispatchQueue.global().async {
                 self.releaseMemory()
-                application.endBackgroundTask(task)
             }
         }
-    }
-    
-    @objc
-    private func applicationDidReceiveMemoryWarning(_ notification: NSNotification) {
-        DispatchQueue.global().async {
-            self.releaseMemory()
+
+        center.addObserver(forName: UIApplication.didEnterBackgroundNotification,
+            object: nil, queue: OperationQueue()) { notification in
+
+            guard let application = notification.object as? UIApplication else {
+                return
+            }
+            
+            let task: UIBackgroundTaskIdentifier = application.beginBackgroundTask(expirationHandler: nil)
+            if task == .invalid {
+                // Perform releaseMemory() synchronously.
+                self.releaseMemory()
+            } else {
+                // Perform releaseMemory() asynchronously.
+                DispatchQueue.global().async {
+                    self.releaseMemory()
+                    application.endBackgroundTask(task)
+                }
+            }
         }
+    
     }
     #endif
 }
@@ -252,28 +245,22 @@ extension DatabasePool: DatabaseReader {
     private func setupSuspension() {
         if configuration.observesSuspensionNotifications {
             let center = NotificationCenter.default
-            center.addObserver(
-                self,
-                selector: #selector(DatabasePool.suspend(_:)),
-                name: Database.suspendNotification,
-                object: nil)
-            center.addObserver(
-                self,
-                selector: #selector(DatabasePool.resume(_:)),
-                name: Database.resumeNotification,
-                object: nil)
+            
+            center.addObserver(forName: Database.suspendNotification,
+                object: nil, queue: OperationQueue()) { notification in
+                
+                self.suspend()
+            }
+
+            center.addObserver(forName: Database.resumeNotification,
+                object: nil, queue: OperationQueue()) { notification in
+                
+                self.resume()
+            }
+
         }
     }
     
-    @objc
-    private func suspend(_ notification: Notification) {
-        suspend()
-    }
-    
-    @objc
-    private func resume(_ notification: Notification) {
-        resume()
-    }
     
     // MARK: - Reading from Database
     
