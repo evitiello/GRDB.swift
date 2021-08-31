@@ -1,19 +1,19 @@
-name: CI
+#name: CI
 
-on:
-  push:
-    branches: [ master, development ]
-  pull_request:
-    branches: [ master, development ]
+#on:
+#  push:
+#    branches: [ master, development ]
+#  pull_request:
+#    branches: [ master, development ]
 
-jobs:
-  build:
+#jobs:
+#  build:
 
-    runs-on: macos-latest
+#    runs-on: macos-latest
 
-    steps:
-    - uses: actions/checkout@v2
-    - name: Build
-      run: swift build -v
-    - name: Run tests
-      run: swift test -v
+#    steps:
+#    - uses: actions/checkout@v2
+#    - name: Build
+#      run: swift build -v
+#    - name: Run tests
+#      run: swift test -v
