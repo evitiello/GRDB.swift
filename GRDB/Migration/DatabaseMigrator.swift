@@ -312,9 +312,12 @@ public struct DatabaseMigrator {
                         // So let's create a "regular" temporary database:
                         let tmpURL = URL(fileURLWithPath: NSTemporaryDirectory())
                             .appendingPathComponent(UUID().uuidString)
+                        #if os(Linux)
+                        #else
                         defer {
                             try? FileManager().removeItem(at: tmpURL)
                         }
+                        #endif
                         let tmpDatabase = try DatabaseQueue(path: tmpURL.path, configuration: tmpConfig)
                         return try tmpDatabase.writeWithoutTransaction { db in
                             try runMigrations(db, upTo: lastAppliedIdentifier)
