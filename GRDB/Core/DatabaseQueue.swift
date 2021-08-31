@@ -145,13 +145,13 @@ extension DatabaseQueue {
         if configuration.observesSuspensionNotifications {
             let center = NotificationCenter.default
             
-            center.addObserver(forName: Database.suspendNotification,
+            _ = center.addObserver(forName: Database.suspendNotification,
                 object: nil, queue: OperationQueue()) { notification in
                 
                 self.suspend()
             }
 
-            center.addObserver(forName: Database.resumeNotification,
+            _ = center.addObserver(forName: Database.resumeNotification,
                 object: nil, queue: OperationQueue()) { notification in
                 
                 self.resume()
